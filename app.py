@@ -1,5 +1,7 @@
 import streamlit as st
 import librosa
+import parselmouth
+from parselmouth.praat import call
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -59,9 +61,9 @@ model, hc_baseline = load_artifacts()
 if "history" not in st.session_state:
     st.session_state["history"] = []
 
-st.markdown('<div class="hero-badge">BIOMEDICAL SIGNAL PROCESSING • MFCC TELEMONITORING</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-badge">BIOMEDICAL SIGNAL PROCESSING • MFCC + JITTER & SHIMMER</div>', unsafe_allow_html=True)
 st.title("🎙️ NeuroVoice — Pemantauan Stabilitas Vokal Parkinson")
-st.caption("Evaluasi parameter akustik fonasi vokal /a/ berbasis ekstraksi Mel-Frequency Cepstral Coefficients.")
+st.caption("Analisis gabungan spektral MFCC serta perturbasi akustik Jitter dan Shimmer pada fonasi vokal /a/ berkelanjutan.")
 
 with st.sidebar:
     st.markdown("### 🎛️ Panel Input Sesi")
@@ -107,12 +109,24 @@ if audio_source is not None:
     y_trimmed, _ = librosa.effects.trim(y, top_db=25)
     
     if len(y_trimmed) < sr * 0.5:
-        st.warning("⚠️ Durasi suara terlalu singkat (< 0.5 detik). Coba rekam ulang vokal 'AAAAA...' minimal 3 detik ya.")
+        st.warning("⚠️ Durasi suara terlalu singkat. Coba rekam ulang vokal 'AAAAA...' minimal 3 detik ya.")
     else:
+        # Ekstraksi 13 MFCC
         mfcc = librosa.feature.mfcc(y=y_trimmed, sr=sr, n_mfcc=13)
         mfcc_mean = np.mean(mfcc.T, axis=0)
         
-        prob_pd = model.predict_proba([mfcc_mean])[0][1] * 100
+        # Ekstraksi Jitter, Shimmer, & Pitch F0 via Praat
+        sound = parselmouth.Sound(y_trimmed, sampling_frequency=sr)
+        pitch = call(sound, "To Pitch", 0.0, 75, 600)
+        mean_f0 = call(pitch, "Get mean", 0, 0, "Hertz")
+        point_process = call(sound, "To PointProcess (periodic, cc)", 75, 600)
+        jitter_val = call(point_process, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3) * 100
+        shimmer_val = call([sound, point_process], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6) * 100
+        
+        acoustic_feats = np.nan_to_num([jitter_val, shimmer_val, mean_f0], nan=0.0)
+        all_features = np.concatenate([mfcc_mean, acoustic_feats])
+        
+        prob_pd = model.predict_proba([all_features])[0][1] * 100
         
         if prob_pd < 40:
             status = "Stabil (Mendekati Baseline)"
@@ -129,17 +143,48 @@ if audio_source is not None:
                 "Sesi": session_label,
                 "Sumber": source_name,
                 "Skor Anomali (%)": round(prob_pd, 2),
+                "Jitter (%)": round(acoustic_feats[0], 2),
+                "Shimmer (%)": round(acoustic_feats[1], 2),
                 "Status": status
             })
             st.sidebar.success("Tercatat di log sesi!")
 
+        # Baris 1: Metrik Utama
         c1, c2, c3 = st.columns(3)
-        c1.metric("Indeks Anomali Vokal", f"{prob_pd:.1f}%", status)
+        c1.metric("Indeks Anomali Gabungan", f"{prob_pd:.1f}%", status)
         c2.metric("Durasi Efektif Fonasi", f"{len(y_trimmed)/sr:.2f} detik", "Trimmed Silence")
-        c3.metric("Resolusi Sampling", f"{sr:,} Hz", "13 Koefisien MFCC")
+        c3.metric("Resolusi Sampling", f"{sr:,} Hz", "13 MFCC + 3 Akustik")
 
         st.markdown("<br>", unsafe_allow_html=True)
 
+        # Baris 2: Metrik Perturbasi Akustik (Jitter, Shimmer, F0)
+        a1, a2, a3 = st.columns(3)
+        diff_jitter = acoustic_feats[0] - hc_baseline[13]
+        diff_shimmer = acoustic_feats[1] - hc_baseline[14]
+        diff_f0 = acoustic_feats[2] - hc_baseline[15]
+
+        a1.metric(
+            "Jitter Lokal (Instabilitas Frekuensi)",
+            f"{acoustic_feats[0]:.2f}%",
+            f"{diff_jitter:+.2f}% vs Baseline Sehat",
+            delta_color="inverse"
+        )
+        a2.metric(
+            "Shimmer Lokal (Instabilitas Amplitudo)",
+            f"{acoustic_feats[1]:.2f}%",
+            f"{diff_shimmer:+.2f}% vs Baseline Sehat",
+            delta_color="inverse"
+        )
+        a3.metric(
+            "Frekuensi Dasar Rata-rata (Pitch F0)",
+            f"{acoustic_feats[2]:.1f} Hz",
+            f"{diff_f0:+.1f} Hz vs Baseline Sehat",
+            delta_color="off"
+        )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Baris 3: Gauge Meter + Profil MFCC Interaktif
         col_gauge, col_mfcc = st.columns([1, 1.6])
 
         with col_gauge:
@@ -172,7 +217,7 @@ if audio_source is not None:
             koef_idx = [f"MFCC-{i}" for i in range(1, 14)]
             fig_mfcc = go.Figure()
             fig_mfcc.add_trace(go.Scatter(
-                x=koef_idx, y=hc_baseline,
+                x=koef_idx, y=hc_baseline[:13],
                 mode='lines+markers',
                 name='Baseline Sehat (HC)',
                 line=dict(color='#00D4B4', width=3, dash='dash'),
@@ -198,6 +243,7 @@ if audio_source is not None:
             )
             st.plotly_chart(fig_mfcc, use_container_width=True)
 
+        # Baris 4: Waveform Interaktif
         step = max(1, len(y_trimmed) // 3000)
         y_plot = y_trimmed[::step]
         t_plot = np.linspace(0, len(y_trimmed)/sr, num=len(y_plot))
@@ -222,14 +268,14 @@ if audio_source is not None:
         st.plotly_chart(fig_wave, use_container_width=True)
 
 else:
-    st.info("👈 Pilih tab **Mikrofon Langsung** untuk merekam suara secara *real-time*, atau **Unggah File** untuk menguji dataset `.wav`.")
+    st.info("👈 Pilih tab **Mikrofon Langsung** untuk merekam fonasi vokal /a/, atau **Unggah File** untuk menguji dataset `.wav`.")
 
 st.markdown("---")
 st.subheader("📈 Tren Pemantauan Antar-Sesi (Telemonitoring Log)")
 
 if len(st.session_state["history"]) > 0:
     df_hist = pd.DataFrame(st.session_state["history"])
-    col_chart, col_table = st.columns([1.4, 1])
+    col_chart, col_table = st.columns([1.3, 1.2])
     
     with col_chart:
         fig_trend = go.Figure(go.Scatter(
