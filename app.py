@@ -47,6 +47,19 @@ st.markdown("""
         margin-bottom: 16px;
         font-size: 0.92rem;
     }
+
+    .analysis-card {
+        background: rgba(22, 32, 50, 0.85);
+        border: 1px solid rgba(56, 189, 248, 0.25);
+        border-left: 4px solid #38BDF8;
+        padding: 14px 18px;
+        border-radius: 10px;
+        margin-top: 10px;
+        margin-bottom: 18px;
+        font-size: 0.92rem;
+        line-height: 1.55;
+        color: #E2E8F0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -111,11 +124,9 @@ if audio_source is not None:
     if len(y_trimmed) < sr * 0.5:
         st.warning("⚠️ Durasi suara terlalu singkat. Coba rekam ulang vokal 'AAAAA...' minimal 3 detik ya.")
     else:
-        # Ekstraksi 13 MFCC
         mfcc = librosa.feature.mfcc(y=y_trimmed, sr=sr, n_mfcc=13)
         mfcc_mean = np.mean(mfcc.T, axis=0)
         
-        # Ekstraksi Jitter, Shimmer, & Pitch F0 via Praat
         sound = parselmouth.Sound(y_trimmed, sampling_frequency=sr)
         pitch = call(sound, "To Pitch", 0.0, 75, 600)
         mean_f0 = call(pitch, "Get mean", 0, 0, "Hertz")
@@ -131,12 +142,15 @@ if audio_source is not None:
         if prob_pd < 40:
             status = "Stabil (Mendekati Baseline)"
             badge_color = "#00D4B4"
+            summary_note = "Pola spektral dan kestabilan getaran pita suara berada dalam rentang normal mendekati kelompok kontrol sehat."
         elif prob_pd < 70:
             status = "Waspada (Fluktuasi Akustik)"
             badge_color = "#F59E0B"
+            summary_note = "Terdeteksi fluktuasi mikro pada periodisitas atau energi spektral vokal. Disarankan pemantauan berkala."
         else:
             status = "Degradasi Tinggi (Evaluasi Medis)"
             badge_color = "#EF4444"
+            summary_note = "Ditemukan deviasi akustik signifikan yang mengindikasikan pola disartria hipokinetik. Perlu rujukan evaluasi klinis lebih lanjut."
 
         if st.sidebar.button("💾 Simpan ke Log Pemantauan", type="primary", use_container_width=True):
             st.session_state["history"].append({
@@ -149,42 +163,50 @@ if audio_source is not None:
             })
             st.sidebar.success("Tercatat di log sesi!")
 
-        # Baris 1: Metrik Utama
         c1, c2, c3 = st.columns(3)
         c1.metric("Indeks Anomali Gabungan", f"{prob_pd:.1f}%", status)
         c2.metric("Durasi Efektif Fonasi", f"{len(y_trimmed)/sr:.2f} detik", "Trimmed Silence")
         c3.metric("Resolusi Sampling", f"{sr:,} Hz", "13 MFCC + 3 Akustik")
 
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="analysis-card" style="border-left-color: {badge_color};">
+            <b>🩺 Interpretasi Sistem:</b> {summary_note}
+        </div>
+        """, unsafe_allow_html=True)
 
-        # Baris 2: Metrik Perturbasi Akustik (Jitter, Shimmer, F0)
         a1, a2, a3 = st.columns(3)
         diff_jitter = acoustic_feats[0] - hc_baseline[13]
         diff_shimmer = acoustic_feats[1] - hc_baseline[14]
         diff_f0 = acoustic_feats[2] - hc_baseline[15]
 
-        a1.metric(
-            "Jitter Lokal (Instabilitas Frekuensi)",
-            f"{acoustic_feats[0]:.2f}%",
-            f"{diff_jitter:+.2f}% vs Baseline Sehat",
-            delta_color="inverse"
+        a1.metric("Jitter Lokal (Instabilitas Frekuensi)", f"{acoustic_feats[0]:.2f}%", f"{diff_jitter:+.2f}% vs Baseline Sehat", delta_color="inverse")
+        a2.metric("Shimmer Lokal (Instabilitas Amplitudo)", f"{acoustic_feats[1]:.2f}%", f"{diff_shimmer:+.2f}% vs Baseline Sehat", delta_color="inverse")
+        a3.metric("Frekuensi Dasar Rata-rata (Pitch F0)", f"{acoustic_feats[2]:.1f} Hz", f"{diff_f0:+.1f} Hz vs Baseline Sehat", delta_color="off")
+
+        jitter_desc = (
+            f"<b>Tinggi ({acoustic_feats[0]:.2f}% > batas normal 1.04%)</b> — menandakan adanya ketidakstabilan siklus waktu getaran pita suara akibat kekakuan otot laring."
+            if acoustic_feats[0] > 1.04 else
+            f"<b>Terkendali ({acoustic_feats[0]:.2f}% ≤ batas normal 1.04%)</b> — ketegangan pita suara menjaga periode frekuensi tetap konsisten."
         )
-        a2.metric(
-            "Shimmer Lokal (Instabilitas Amplitudo)",
-            f"{acoustic_feats[1]:.2f}%",
-            f"{diff_shimmer:+.2f}% vs Baseline Sehat",
-            delta_color="inverse"
+        shimmer_desc = (
+            f"<b>Meningkat ({acoustic_feats[1]:.2f}% > batas normal 3.81%)</b> — mengindikasikan fluktuasi amplitudo puncak akibat penutupan celah glotis yang kurang rapat."
+            if acoustic_feats[1] > 3.81 else
+            f"<b>Stabil ({acoustic_feats[1]:.2f}% ≤ batas normal 3.81%)</b> — kontrol tekanan aliran udara subglotis dan penutupan pita suara terjaga baik."
         )
-        a3.metric(
-            "Frekuensi Dasar Rata-rata (Pitch F0)",
-            f"{acoustic_feats[2]:.1f} Hz",
-            f"{diff_f0:+.1f} Hz vs Baseline Sehat",
-            delta_color="off"
+        f0_desc = (
+            "cenderung merendah/monoton dibanding rata-rata kelompok sehat (karakteristik <i>hypophonia</i>)."
+            if diff_f0 < -15 else
+            "berada dalam rentang variasi nada dasar yang wajar."
         )
 
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # Baris 3: Gauge Meter + Profil MFCC Interaktif
+        st.markdown(f"""
+        <div class="analysis-card">
+            <b>🔬 Analisis Perturbasi Biosinyal Glotal:</b><br>
+            • <b>Jitter:</b> {jitter_desc}<br>
+            • <b>Shimmer:</b> {shimmer_desc}<br>
+            • <b>Pitch F0:</b> Frekuensi dasar berada di <b>{acoustic_feats[2]:.1f} Hz</b>, {f0_desc}
+        </div>
+        """, unsafe_allow_html=True)
         col_gauge, col_mfcc = st.columns([1, 1.6])
 
         with col_gauge:
@@ -206,66 +228,60 @@ if audio_source is not None:
                     ],
                 }
             ))
-            fig_gauge.update_layout(
-                paper_bgcolor="#162032",
-                height=330,
-                margin=dict(l=20, r=20, t=50, b=20)
-            )
-            st.plotly_chart(fig_gauge, use_container_width=True)
+            fig_gauge.update_layout(paper_bgcolor="#162032", height=330, margin=dict(l=20, r=20, t=50, b=20))
+            st.plotly_chart(fig_gauge, width="stretch")
 
         with col_mfcc:
             koef_idx = [f"MFCC-{i}" for i in range(1, 14)]
             fig_mfcc = go.Figure()
-            fig_mfcc.add_trace(go.Scatter(
-                x=koef_idx, y=hc_baseline[:13],
-                mode='lines+markers',
-                name='Baseline Sehat (HC)',
-                line=dict(color='#00D4B4', width=3, dash='dash'),
-                marker=dict(size=8)
-            ))
-            fig_mfcc.add_trace(go.Scatter(
-                x=koef_idx, y=mfcc_mean,
-                mode='lines+markers',
-                name='Rekaman Saat Ini',
-                line=dict(color='#F43F5E', width=3),
-                marker=dict(size=8, symbol='square')
-            ))
+            fig_mfcc.add_trace(go.Scatter(x=koef_idx, y=hc_baseline[:13], mode='lines+markers', name='Baseline Sehat (HC)', line=dict(color='#00D4B4', width=3, dash='dash'), marker=dict(size=8)))
+            fig_mfcc.add_trace(go.Scatter(x=koef_idx, y=mfcc_mean, mode='lines+markers', name='Rekaman Saat Ini', line=dict(color='#F43F5E', width=3), marker=dict(size=8, symbol='square')))
             fig_mfcc.update_layout(
                 title="<b>Perbandingan Spektral MFCC vs Baseline Sehat</b>",
-                paper_bgcolor="#162032",
-                plot_bgcolor="#0B1120",
-                font=dict(color="#F1F5F9"),
-                height=330,
-                margin=dict(l=20, r=20, t=50, b=20),
+                paper_bgcolor="#162032", plot_bgcolor="#0B1120", font=dict(color="#F1F5F9"),
+                height=330, margin=dict(l=20, r=20, t=50, b=20),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 xaxis=dict(gridcolor="rgba(255,255,255,0.05)"),
                 yaxis=dict(title="Energi Spektral", gridcolor="rgba(255,255,255,0.05)")
             )
-            st.plotly_chart(fig_mfcc, use_container_width=True)
+            st.plotly_chart(fig_mfcc, width="stretch")
 
-        # Baris 4: Waveform Interaktif
+        mfcc_diffs = np.abs(mfcc_mean - hc_baseline[:13])
+        max_idx = int(np.argmax(mfcc_diffs))
+        max_coef_name = f"MFCC-{max_idx + 1}"
+        euclid_dist = float(np.linalg.norm(mfcc_mean - hc_baseline[:13]))
+
+        st.markdown(f"""
+        <div class="analysis-card">
+            <b>📊 Analisis Selubung Spektral (MFCC):</b><br>
+            Jarak deviasi spektral total terhadap acuan sehat adalah <b>{euclid_dist:.2f}</b>, dengan penyimpangan terbesar terdeteksi pada koefisien <b>{max_coef_name}</b> 
+            (selisih <b>{mfcc_diffs[max_idx]:.2f}</b>). Pergeseran pada koefisien orde rendah mencerminkan perubahan energi keseluruhan fonasi, sedangkan orde menengah–tinggi menunjukkan perubahan resonansi traktus vokal akibat keterbatasan gerak artikulator.
+        </div>
+        """, unsafe_allow_html=True)
+
         step = max(1, len(y_trimmed) // 3000)
         y_plot = y_trimmed[::step]
         t_plot = np.linspace(0, len(y_trimmed)/sr, num=len(y_plot))
 
-        fig_wave = go.Figure(go.Scatter(
-            x=t_plot, y=y_plot,
-            mode='lines',
-            line=dict(color='#38BDF8', width=1.2),
-            fill='tozeroy',
-            fillcolor='rgba(56, 189, 248, 0.1)'
-        ))
+        fig_wave = go.Figure(go.Scatter(x=t_plot, y=y_plot, mode='lines', line=dict(color='#38BDF8', width=1.2), fill='tozeroy', fillcolor='rgba(56, 189, 248, 0.1)'))
         fig_wave.update_layout(
             title="<b>Sinyal Domain Waktu (Trimmed Waveform)</b>",
-            paper_bgcolor="#162032",
-            plot_bgcolor="#0B1120",
-            font=dict(color="#F1F5F9"),
-            height=230,
-            margin=dict(l=20, r=20, t=45, b=20),
+            paper_bgcolor="#162032", plot_bgcolor="#0B1120", font=dict(color="#F1F5F9"),
+            height=230, margin=dict(l=20, r=20, t=45, b=20),
             xaxis=dict(title="Waktu (detik)", gridcolor="rgba(255,255,255,0.05)"),
             yaxis=dict(title="Amplitudo", gridcolor="rgba(255,255,255,0.05)")
         )
-        st.plotly_chart(fig_wave, use_container_width=True)
+        st.plotly_chart(fig_wave, width="stretch")
+
+        peak_amp = float(np.max(np.abs(y_trimmed)))
+        rms_energy = float(np.sqrt(np.mean(y_trimmed**2)))
+        st.markdown(f"""
+        <div class="analysis-card">
+            <b>〰️ Analisis Domain Waktu (Waveform):</b><br>
+            Sinyal aktif berdurasi <b>{len(y_trimmed)/sr:.2f} detik</b> memiliki amplitudo puncak <b>{peak_amp:.3f}</b> dan energi rata-rata (RMS) <b>{rms_energy:.4f}</b>. 
+            Ketidakrataan amplop gelombang pada rekaman vokal datar menandakan adanya modulasi amplitudo tak terkendali selama fase fonasi berkelanjutan.
+        </div>
+        """, unsafe_allow_html=True)
 
 else:
     st.info("👈 Pilih tab **Mikrofon Langsung** untuk merekam fonasi vokal /a/, atau **Unggah File** untuk menguji dataset `.wav`.")
@@ -279,26 +295,19 @@ if len(st.session_state["history"]) > 0:
     
     with col_chart:
         fig_trend = go.Figure(go.Scatter(
-            x=df_hist["Sesi"],
-            y=df_hist["Skor Anomali (%)"],
-            mode='lines+markers+text',
-            text=df_hist["Skor Anomali (%)"].astype(str) + "%",
-            textposition="top center",
-            line=dict(color='#00D4B4', width=3),
-            marker=dict(size=10, color='#F1F5F9', line=dict(width=2, color='#00D4B4'))
+            x=df_hist["Sesi"], y=df_hist["Skor Anomali (%)"],
+            mode='lines+markers+text', text=df_hist["Skor Anomali (%)"].astype(str) + "%", textposition="top center",
+            line=dict(color='#00D4B4', width=3), marker=dict(size=10, color='#F1F5F9', line=dict(width=2, color='#00D4B4'))
         ))
         fig_trend.update_layout(
-            paper_bgcolor="#162032",
-            plot_bgcolor="#0B1120",
-            font=dict(color="#F1F5F9"),
-            height=300,
-            margin=dict(l=20, r=20, t=30, b=20),
+            paper_bgcolor="#162032", plot_bgcolor="#0B1120", font=dict(color="#F1F5F9"),
+            height=300, margin=dict(l=20, r=20, t=30, b=20),
             yaxis=dict(range=[0, 110], title="Skor Anomali (%)", gridcolor="rgba(255,255,255,0.05)"),
             xaxis=dict(gridcolor="rgba(255,255,255,0.05)")
         )
-        st.plotly_chart(fig_trend, use_container_width=True)
+        st.plotly_chart(fig_trend, width="stretch")
         
     with col_table:
-        st.dataframe(df_hist, use_container_width=True, height=300)
+        st.dataframe(df_hist, width="stretch", height=300)
 else:
     st.caption("Belum ada sesi yang disimpan. Klik **Simpan ke Log Pemantauan** setelah merekam atau mengunggah audio.")
