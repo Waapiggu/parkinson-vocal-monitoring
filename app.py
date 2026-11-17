@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import joblib
 
 st.set_page_config(
-    page_title="NeuroVoice | Parkinson Telemonitoring",
+    page_title="BioAcoustiX | Parkinson Telemonitoring",
     page_icon="🎙️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -75,7 +75,7 @@ if "history" not in st.session_state:
     st.session_state["history"] = []
 
 st.markdown('<div class="hero-badge">BIOMEDICAL SIGNAL PROCESSING • MFCC + JITTER & SHIMMER</div>', unsafe_allow_html=True)
-st.title("🎙️ NeuroVoice — Pemantauan Stabilitas Vokal Parkinson")
+st.title("🎙️ BioAcoustiX — Pemantauan Stabilitas Vokal Parkinson")
 st.caption("Analisis gabungan spektral MFCC serta perturbasi akustik Jitter dan Shimmer pada fonasi vokal /a/ berkelanjutan.")
 
 with st.sidebar:
